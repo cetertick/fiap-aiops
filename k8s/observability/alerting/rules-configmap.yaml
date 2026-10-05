@@ -1,0 +1,176 @@
+# Grafana unified-alerting file provisioning: alert rules.
+# Folder "AIOps Lab Alerts", 1m evaluation interval. These thresholds MUST
+# match the AIOps remediation agent's own thresholds (see the fixed contract
+# in the task), so that during the class both Grafana and the agent fire on
+# the same injected anomaly at roughly the same time.
+#
+# `datasourceUid: prometheus` assumes the default uid kube-prometheus-stack's
+# grafana chart gives its auto-provisioned Prometheus datasource ("prometheus").
+# Verify with `kubectl -n monitoring get configmap -l grafana_datasource -o yaml`
+# (or the Grafana UI -> Connections -> Data sources -> Prometheus -> uid in
+# the URL) before the class and adjust here if it differs.
+#
+# Each rule uses a 2-node pipeline: a Prometheus query (refId A, instant)
+# feeding a `threshold` (or `math`) reducer/classifier (refId B), with
+# `condition: B`. This is the schema Grafana's alerting file-provisioning
+# expects (same shape the UI's rule editor produces under the hood).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-alerting-rules
+  namespace: monitoring
+  labels:
+    grafana_alert: "1"
+data:
+  rules.yaml: |
+    apiVersion: 1
+
+    groups:
+      - orgId: 1
+        name: aiops-lab-anomalies
+        folder: AIOps Lab Alerts
+        interval: 1m
+        rules:
+          - uid: aiops-high-error-rate
+            title: HighErrorRate
+            condition: B
+            for: 2m
+            data:
+              - refId: A
+                datasourceUid: prometheus
+                relativeTimeRange:
+                  from: 120
+                  to: 0
+                model:
+                  refId: A
+                  instant: true
+                  range: false
+                  expr: >-
+                    sum(rate(http_requests_total{status=~"5..",app=~"orders-api|payments-api|inventory-api"}[2m])) by (app)
+                    /
+                    sum(rate(http_requests_total{app=~"orders-api|payments-api|inventory-api"}[2m])) by (app)
+              - refId: B
+                datasourceUid: "__expr__"
+                model:
+                  refId: B
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: gt
+                        params: [0.2]
+            labels:
+              severity: critical
+              lab: aiops
+            annotations:
+              summary: "{{ $labels.app }}: 5xx error rate above 20% for 2m"
+              description: "ratio of 5xx to total http_requests_total for app={{ $labels.app }} has exceeded 0.2 (20%) sustained over 2 minutes."
+
+          - uid: aiops-high-latency-p95
+            title: HighLatencyP95
+            condition: B
+            for: 2m
+            data:
+              - refId: A
+                datasourceUid: prometheus
+                relativeTimeRange:
+                  from: 120
+                  to: 0
+                model:
+                  refId: A
+                  instant: true
+                  range: false
+                  expr: >-
+                    histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{app=~"orders-api|payments-api|inventory-api"}[2m])) by (app, le))
+              - refId: B
+                datasourceUid: "__expr__"
+                model:
+                  refId: B
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: gt
+                        params: [1.5]
+            labels:
+              severity: critical
+              lab: aiops
+            annotations:
+              summary: "{{ $labels.app }}: p95 latency above 1.5s for 2m"
+              description: "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[2m])) for app={{ $labels.app }} has exceeded 1.5s sustained over 2 minutes."
+
+          - uid: aiops-pod-crash-looping
+            title: PodCrashLooping
+            condition: C
+            for: 5m
+            data:
+              - refId: A
+                datasourceUid: prometheus
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                model:
+                  refId: A
+                  instant: true
+                  range: false
+                  expr: >-
+                    increase(kube_pod_container_status_restarts_total{namespace="aiops-lab"}[5m])
+              - refId: B
+                datasourceUid: prometheus
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                model:
+                  refId: B
+                  instant: true
+                  range: false
+                  expr: >-
+                    kube_pod_container_status_waiting_reason{namespace="aiops-lab",reason="CrashLoopBackOff"}
+              - refId: C
+                datasourceUid: "__expr__"
+                model:
+                  refId: C
+                  type: math
+                  expression: "($A > 0) || ($B > 0)"
+            labels:
+              severity: critical
+              lab: aiops
+            annotations:
+              summary: "Pod {{ $labels.pod }} in aiops-lab is crash-looping"
+              description: "container {{ $labels.container }} of pod {{ $labels.pod }} either has an increasing restart count or is in CrashLoopBackOff within the last 5 minutes."
+
+          - uid: aiops-high-memory-usage
+            title: HighMemoryUsage
+            condition: B
+            for: 3m
+            data:
+              - refId: A
+                datasourceUid: prometheus
+                relativeTimeRange:
+                  from: 180
+                  to: 0
+                model:
+                  refId: A
+                  instant: true
+                  range: false
+                  expr: >-
+                    container_memory_working_set_bytes{namespace="aiops-lab",container!="",container!="POD"}
+                    /
+                    container_spec_memory_limit_bytes{namespace="aiops-lab",container!="",container!="POD"}
+                    > 0
+              - refId: B
+                datasourceUid: "__expr__"
+                model:
+                  refId: B
+                  type: threshold
+                  expression: A
+                  conditions:
+                    - evaluator:
+                        type: gt
+                        params: [0.85]
+            labels:
+              severity: warning
+              lab: aiops
+            annotations:
+              summary: "Container {{ $labels.container }} in pod {{ $labels.pod }} using >85% of its memory limit"
+              description: "container_memory_working_set_bytes / container_spec_memory_limit_bytes for pod={{ $labels.pod }} container={{ $labels.container }} in aiops-lab has exceeded 0.85 sustained over 3 minutes (memory-leak proxy). Cross-reference pod -> app via the pod name prefix (e.g. orders-api-xxxx)."

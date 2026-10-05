@@ -18,9 +18,8 @@
 # which has been stable for a long time and is just "drop a ConfigMap with the
 # right label, sidecar copies the file into Grafana's provisioning directory".
 # See ../dashboards/*-configmap.yaml for dashboards (same sidecar pattern) and
-# the alerting ConfigMaps referenced in apps/kube-prometheus-stack-app.yaml's
-# sibling files under k8s/observability/alerting/ for contact points, policy,
-# and rules. Full rationale is in ../README.md.
+# ../alerting/*-configmap.yaml for contact points, notification policy, and
+# the 4 anomaly alert rules. Full rationale is in ../README.md.
 
 fullnameOverride: kube-prometheus-stack
 

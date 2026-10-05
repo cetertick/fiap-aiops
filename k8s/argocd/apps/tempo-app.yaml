@@ -1,0 +1,29 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: tempo
+  namespace: argocd
+  labels:
+    aiops-lab-component: observability
+spec:
+  project: default
+  sources:
+    - repoURL: https://grafana.github.io/helm-charts
+      chart: tempo
+      targetRevision: 1.10.1 # bump with: helm search repo tempo --versions
+      helm:
+        releaseName: tempo
+        valueFiles:
+          - $values/k8s/observability/values/values-tempo.yaml
+    - repoURL: https://github.com/cetertick/fiap-aiops.git
+      targetRevision: claude/confident-carson-hor10c # NOTE: change to main/HEAD once merged
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

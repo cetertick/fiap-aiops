@@ -1,0 +1,42 @@
+# Ingress exposing the ArgoCD UI/API via an AWS ALB for the class.
+#
+# DECISION: HTTP-only ALB, talking to argocd-server in --insecure mode.
+# argocd-server serves TLS on :443 by default; terminating ALB HTTPS and then
+# re-encrypting (or passing through) to that is more setup than a 1h20 class
+# needs. Instead we run argocd-server with `--insecure` (it then serves plain
+# HTTP on :8080) and let the ALB serve plain HTTP too. This is NOT
+# appropriate for a real/long-lived cluster -- fine for a teaching lab that's
+# torn down same day.
+#
+# REQUIRED one-time patch before this Ingress is useful (not applied by this
+# file -- argocd-cmd-params-cm is owned by the argocd install manifests, not
+# by us):
+#
+#   kubectl -n argocd patch configmap argocd-cmd-params-cm --type merge \
+#     -p '{"data":{"server.insecure":"true"}}'
+#   kubectl -n argocd rollout restart deployment argocd-server
+#
+# See ../../k8s/observability/README.md for the full install sequence.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argocd-server
+  namespace: argocd
+  annotations:
+    alb.ingress.kubernetes.io/scheme: internet-facing
+    alb.ingress.kubernetes.io/target-type: ip
+    alb.ingress.kubernetes.io/backend-protocol: HTTP
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}]'
+    alb.ingress.kubernetes.io/healthcheck-path: /healthz
+spec:
+  ingressClassName: alb
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: argocd-server
+                port:
+                  number: 80

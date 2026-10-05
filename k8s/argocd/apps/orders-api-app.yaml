@@ -1,0 +1,34 @@
+# Manifests (Deployment/Service/PodMonitor) for orders-api live flat under
+# k8s/apps/ alongside payments-api's and inventory-api's, owned by another
+# workstream. `directory.include` scopes this Application to only the
+# orders-api-*.yaml files in that shared directory, so this Application's
+# prune never touches the other two apps' resources (all three Applications
+# point at the same `path: k8s/apps` but each with its own include filter).
+# `namespace.yaml` (creates `aiops-lab`) is deliberately excluded from all
+# three -- it's applied once, out of band, not owned by any single app's
+# Application.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: orders-api
+  namespace: argocd
+  labels:
+    aiops-lab-component: demo-app
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/cetertick/fiap-aiops.git
+    targetRevision: claude/confident-carson-hor10c # NOTE: change to main/HEAD once merged
+    path: k8s/apps
+    directory:
+      recurse: false
+      include: "orders-api-*.yaml"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: aiops-lab
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

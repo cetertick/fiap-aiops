@@ -1,0 +1,34 @@
+# Grafana unified-alerting file provisioning: notification policy.
+# Routes every alert to BOTH contact points: `discord-alerts` (human-visible,
+# live during class) and `postmortem-webhook` (feeds the postmortem-generator
+# service). Two sibling routes, each matching everything with
+# `continue: true`, so matching the first does not stop the second from
+# also firing -- this is how you fan a single alert out to two contact
+# points in Grafana's one-receiver-per-route model.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-alerting-policies
+  namespace: monitoring
+  labels:
+    grafana_alert: "1"
+data:
+  policies.yaml: |
+    apiVersion: 1
+
+    policies:
+      - orgId: 1
+        receiver: discord-alerts
+        group_by: ["alertname", "app"]
+        group_wait: 30s
+        group_interval: 5m
+        repeat_interval: 1h
+        routes:
+          - receiver: discord-alerts
+            matchers:
+              - alertname =~ ".+"
+            continue: true
+          - receiver: postmortem-webhook
+            matchers:
+              - alertname =~ ".+"
+            continue: true

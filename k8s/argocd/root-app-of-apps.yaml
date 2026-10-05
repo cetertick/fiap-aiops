@@ -1,0 +1,31 @@
+# "App of apps" root Application. Point ArgoCD at this once (after ArgoCD
+# itself is installed) and it syncs every child Application under
+# k8s/argocd/apps/ -- which in turn installs the observability stack, wires
+# up ArgoCD for the 3 demo apps, the aiops-agent, and the postmortem-service.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: aiops-lab-root
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/cetertick/fiap-aiops.git
+    # NOTE: this targets the feature branch the lab was built on so the
+    # class can run before the PR merges. Once merged, change this to
+    # `main` (or `HEAD`) so the root app tracks the default branch instead.
+    targetRevision: claude/confident-carson-hor10c
+    path: k8s/argocd/apps
+    directory:
+      recurse: false
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

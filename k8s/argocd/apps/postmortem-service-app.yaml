@@ -1,0 +1,25 @@
+# Manifests owned by another workstream at postmortem/k8s in this repo.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: postmortem-service
+  namespace: argocd
+  labels:
+    aiops-lab-component: agent
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/cetertick/fiap-aiops.git
+    targetRevision: claude/confident-carson-hor10c # NOTE: change to main/HEAD once merged
+    path: postmortem/k8s
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: aiops-lab
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

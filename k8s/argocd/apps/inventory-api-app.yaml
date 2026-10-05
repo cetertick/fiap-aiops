@@ -1,0 +1,27 @@
+# See orders-api-app.yaml for the full note on the shared `k8s/apps`
+# directory and the `include` filter.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: inventory-api
+  namespace: argocd
+  labels:
+    aiops-lab-component: demo-app
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/cetertick/fiap-aiops.git
+    targetRevision: claude/confident-carson-hor10c # NOTE: change to main/HEAD once merged
+    path: k8s/apps
+    directory:
+      recurse: false
+      include: "inventory-api-*.yaml"
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: aiops-lab
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

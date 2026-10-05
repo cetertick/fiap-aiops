@@ -1,0 +1,36 @@
+# Multi-source Application: Helm chart comes from the public chart repo,
+# values come from THIS git repo (so editing values/*.yaml and letting
+# ArgoCD self-heal is the normal workflow, no need to touch this file again).
+#
+# Chart version pinned to a known-good release as of this lab's authoring.
+# Bump with: helm search repo kube-prometheus-stack --versions
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kube-prometheus-stack
+  namespace: argocd
+  labels:
+    aiops-lab-component: observability
+spec:
+  project: default
+  sources:
+    - repoURL: https://prometheus-community.github.io/helm-charts
+      chart: kube-prometheus-stack
+      targetRevision: 62.7.0
+      helm:
+        releaseName: kube-prometheus-stack
+        valueFiles:
+          - $values/k8s/observability/values/values-kube-prometheus-stack.yaml
+    - repoURL: https://github.com/cetertick/fiap-aiops.git
+      targetRevision: claude/confident-carson-hor10c # NOTE: change to main/HEAD once merged
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
