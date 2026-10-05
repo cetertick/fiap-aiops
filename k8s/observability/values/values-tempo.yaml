@@ -1,0 +1,84 @@
+# Helm values for:
+#   chart:   tempo   (single-binary Tempo, NOT tempo-distributed)
+#   repo:    https://grafana.github.io/helm-charts
+#   release: tempo
+#   namespace: monitoring
+#
+# Single-binary mode, local filesystem storage backend, OTLP gRPC receiver on
+# 4317 (used by the apps + the otel-collector) and the Tempo query API on the
+# chart default port 3200 (used by Grafana's Tempo datasource, see
+# values-kube-prometheus-stack.yaml). No object storage (S3/GCS) is needed
+# for this short-lived class cluster.
+#
+# NOTE: the grafana/tempo chart renders this `config:` block close to
+# verbatim into Tempo's ConfigMap (same pattern loki-stack uses for Loki).
+# Chart versions occasionally rename a handful of unrelated top-level keys
+# (persistence, serviceAccount, resources) — if `helm template` complains
+# about an unknown key, drop it; `config` itself is the stable part and is
+# what actually matters for this lab.
+
+tempo:
+  repository: grafana/tempo
+  pullPolicy: IfNotPresent
+
+persistence:
+  enabled: false
+
+serviceAccount:
+  create: true
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+  limits:
+    memory: 512Mi
+
+service:
+  type: ClusterIP
+
+# Raw Tempo config (single binary). Ports:
+#   3200 - HTTP API (query, used by Grafana Tempo datasource + readiness)
+#   4317 - OTLP gRPC receiver (apps + otel-collector export traces here)
+#   4318 - OTLP HTTP receiver (not required by the contract, enabled anyway)
+config: |
+  multitenancy_enabled: false
+
+  server:
+    http_listen_port: 3200
+
+  distributor:
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+  ingester:
+    max_block_duration: 5m
+
+  compactor:
+    compaction:
+      block_retention: 24h
+
+  storage:
+    trace:
+      backend: local
+      local:
+        path: /var/tempo/traces
+      wal:
+        path: /var/tempo/wal
+
+  metrics_generator:
+    registry:
+      external_labels:
+        source: tempo
+    storage:
+      path: /var/tempo/generator/wal
+
+  overrides:
+    defaults:
+      metrics_generator:
+        processors: []

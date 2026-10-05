@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postmortem-service
+  namespace: aiops-lab
+  labels:
+    app: postmortem-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postmortem-service
+  template:
+    metadata:
+      labels:
+        app: postmortem-service
+    spec:
+      containers:
+        - name: postmortem-service
+          image: ghcr.io/cetertick/fiap-aiops-postmortem-service:latest
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: postmortem-secrets
+          env:
+            - name: ANTHROPIC_MODEL
+              value: "claude-sonnet-5-5"
+            - name: PROMETHEUS_URL
+              value: "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"
+            - name: LOKI_URL
+              value: "http://loki.monitoring.svc.cluster.local:3100"
+            - name: APP_NAMESPACE
+              value: "aiops-lab"
+            - name: CONTEXT_WINDOW_MINUTES
+              value: "10"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3

@@ -1,0 +1,196 @@
+name: CI - Scan, Build & Push
+
+# Pipeline de CI/CD do laboratório AIOps.
+#
+# O que este workflow faz:
+#   1. Scan de vulnerabilidades (filesystem) com Trivy em cada serviço.
+#   2. Análise estática de código com SonarCloud (SonarQube SaaS).
+#   3. Build das imagens de container de cada serviço.
+#   4. Scan de vulnerabilidades da IMAGEM construída com Trivy.
+#   5. Em push na branch principal: publica as imagens no GitHub Container
+#      Registry (ghcr.io), usando apenas o GITHUB_TOKEN padrão (não precisa
+#      de credenciais AWS no GitHub Actions — evita o problema de
+#      credenciais temporárias do AWS Academy expirarem dentro do CI).
+#   6. Um job "ci-gate" agrega o resultado de todos os anteriores. Configure
+#      a proteção de branch do repositório para exigir o check "ci-gate" ->
+#      isso bloqueia merge sempre que houver falha crítica em qualquer etapa.
+#
+# Como habilitar:
+#   - Settings > Secrets and variables > Actions > New repository secret:
+#       SONAR_TOKEN   (gerado em https://sonarcloud.io, veja README abaixo)
+#   - Settings > Branches > Branch protection rule (branch "main"):
+#       marque "Require status checks to pass before merging" e selecione
+#       o check "ci-gate".
+#   - Settings > Actions > General > Workflow permissions:
+#       marque "Read and write permissions" (necessário para publicar em
+#       ghcr.io usando o GITHUB_TOKEN).
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write        # necessário para publicar imagens em ghcr.io
+  security-events: write # necessário para publicar relatórios SARIF do Trivy
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAMESPACE: cetertick/fiap-aiops
+
+jobs:
+  # ---------------------------------------------------------------------
+  # 1) Scan de vulnerabilidades em código-fonte / dependências (Trivy fs)
+  # ---------------------------------------------------------------------
+  trivy-fs-scan:
+    name: Trivy (filesystem) - ${{ matrix.service.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - { name: orders-api,         context: apps/orders-api }
+          - { name: payments-api,       context: apps/payments-api }
+          - { name: inventory-api,      context: apps/inventory-api }
+          - { name: aiops-agent,        context: aiops-agent }
+          - { name: postmortem-service, context: postmortem }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Trivy scan de dependências/filesystem
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: ${{ matrix.service.context }}
+          format: sarif
+          output: trivy-fs-${{ matrix.service.name }}.sarif
+          # Falha o job (bloqueando o merge) em achados CRITICAL ou HIGH
+          severity: "CRITICAL,HIGH"
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Upload resultado SARIF para GitHub Code Scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs-${{ matrix.service.name }}.sarif
+          category: trivy-fs-${{ matrix.service.name }}
+
+  # ---------------------------------------------------------------------
+  # 2) Análise estática de código (SonarCloud)
+  # ---------------------------------------------------------------------
+  sonarcloud:
+    name: SonarCloud Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (histórico completo - exigido pelo SonarCloud)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: SonarCloud Scan
+        uses: SonarSource/sonarcloud-github-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.projectKey=cetertick_fiap-aiops
+            -Dsonar.organization=cetertick
+
+  # ---------------------------------------------------------------------
+  # 3) Build das imagens + scan da imagem construída (Trivy image)
+  # ---------------------------------------------------------------------
+  build-and-scan-image:
+    name: Build & Scan imagem - ${{ matrix.service.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service:
+          - { name: orders-api,         context: apps/orders-api }
+          - { name: payments-api,       context: apps/payments-api }
+          - { name: inventory-api,      context: apps/inventory-api }
+          - { name: aiops-agent,        context: aiops-agent }
+          - { name: postmortem-service, context: postmortem }
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build da imagem (carregada localmente para o scan)
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.service.context }}
+          push: false
+          load: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}-${{ matrix.service.name }}:ci-${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
+
+      - name: Trivy scan da imagem construída
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}-${{ matrix.service.name }}:ci-${{ github.sha }}
+          format: sarif
+          output: trivy-image-${{ matrix.service.name }}.sarif
+          severity: "CRITICAL,HIGH"
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Upload resultado SARIF para GitHub Code Scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image-${{ matrix.service.name }}.sarif
+          category: trivy-image-${{ matrix.service.name }}
+
+      # Publica a imagem SOMENTE em push na branch principal (nunca em PR).
+      - name: Login no GitHub Container Registry
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push da imagem final (latest + sha)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.service.context }}
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}-${{ matrix.service.name }}:latest
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}-${{ matrix.service.name }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.service.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service.name }}
+
+  # ---------------------------------------------------------------------
+  # 4) Gate único para branch protection
+  # ---------------------------------------------------------------------
+  ci-gate:
+    name: CI Gate (todas as checagens)
+    if: always()
+    needs: [trivy-fs-scan, sonarcloud, build-and-scan-image]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verifica resultado dos jobs anteriores
+        run: |
+          echo "trivy-fs-scan: ${{ needs.trivy-fs-scan.result }}"
+          echo "sonarcloud: ${{ needs.sonarcloud.result }}"
+          echo "build-and-scan-image: ${{ needs.build-and-scan-image.result }}"
+          if [ "${{ needs.trivy-fs-scan.result }}" != "success" ] || \
+             [ "${{ needs.sonarcloud.result }}" != "success" ] || \
+             [ "${{ needs.build-and-scan-image.result }}" != "success" ]; then
+            echo "Um ou mais checks falharam. Bloqueando merge."
+            exit 1
+          fi
+          echo "Todos os checks passaram."

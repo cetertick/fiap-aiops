@@ -1,0 +1,201 @@
+# Helm values for:
+#   chart:   kube-prometheus-stack
+#   repo:    https://prometheus-community.github.io/helm-charts
+#   release: kube-prometheus-stack
+#   namespace: monitoring
+#
+# Deploys Prometheus Operator + Prometheus + Alertmanager + Grafana + kube-state-metrics
+# + node-exporter. This is the core of the AIOps lab observability stack.
+#
+# ALERTING PROVISIONING NOTE (read this before editing):
+# We deliberately do NOT provision Grafana unified alerting (contact points,
+# notification policy, alert rules) through values keys here
+# (e.g. `grafana.alerting."contactpoints.yaml"`). That mechanism is correct for
+# recent grafana/grafana chart versions, but its exact nested-key shape has
+# shifted across chart releases and is easy to get subtly wrong (silently
+# ignored instead of erroring). Instead we provision alerting via the
+# grafana chart's ConfigMap **sidecar** mechanism (`grafana.sidecar.alerts`),
+# which has been stable for a long time and is just "drop a ConfigMap with the
+# right label, sidecar copies the file into Grafana's provisioning directory".
+# See ../dashboards/*-configmap.yaml for dashboards (same sidecar pattern) and
+# the alerting ConfigMaps referenced in apps/kube-prometheus-stack-app.yaml's
+# sibling files under k8s/observability/alerting/ for contact points, policy,
+# and rules. Full rationale is in ../README.md.
+
+fullnameOverride: kube-prometheus-stack
+
+## ---------------------------------------------------------------------------
+## Prometheus
+## ---------------------------------------------------------------------------
+prometheus:
+  prometheusSpec:
+    # Discover ServiceMonitors / PodMonitors / PrometheusRules / Probes
+    # cluster-wide, regardless of which namespace they live in and regardless
+    # of label (empty selector == match everything). This is required so
+    # Prometheus picks up the demo apps' PodMonitors created in `aiops-lab`
+    # by another team, without us having to coordinate on extra labels.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    probeSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+
+    serviceMonitorSelector: {}
+    serviceMonitorNamespaceSelector: {}
+
+    podMonitorSelector: {}
+    podMonitorNamespaceSelector: {}
+
+    probeSelector: {}
+    probeNamespaceSelector: {}
+
+    ruleSelector: {}
+    ruleNamespaceSelector: {}
+
+    retention: 6h
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        memory: 1Gi
+
+    # Short-lived class cluster: emptyDir is fine, no PVC needed.
+    storageSpec: {}
+
+  # Our own PrometheusRule objects (HighErrorRate, HighLatencyP95,
+  # PodCrashLooping, HighMemoryUsage) are NOT defined here — Grafana manages
+  # these as unified-alerting rules (see alerting provisioning note above),
+  # evaluated by Grafana itself against this Prometheus datasource. This
+  # keeps the "4 anomaly rules" in one place (Grafana) that can fan out to
+  # both Discord and the postmortem-service webhook.
+
+alertmanager:
+  enabled: true
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+
+## ---------------------------------------------------------------------------
+## Grafana
+## ---------------------------------------------------------------------------
+grafana:
+  enabled: true
+
+  # CHANGE ME: placeholder admin password for the class. Rotate this (or move
+  # it to a Secret + grafana.admin.existingSecret) before any real deployment.
+  adminPassword: "CHANGE_ME_aiops2024"
+
+  defaultDashboardsEnabled: true
+
+  sidecar:
+    dashboards:
+      enabled: true
+      label: grafana_dashboard
+      labelValue: "1"
+      folder: /tmp/dashboards
+      provider:
+        name: aiops-lab-dashboards
+        folder: "AIOps Lab"
+        disableDelete: false
+        foldersFromFilesStructure: false
+    datasources:
+      enabled: true
+      label: grafana_datasource
+      labelValue: "1"
+      defaultDatasourceEnabled: true
+    # Unified-alerting provisioning files (contact points, notification
+    # policy, alert rules) picked up from labelled ConfigMaps. See the
+    # ALERTING PROVISIONING NOTE at the top of this file.
+    alerts:
+      enabled: true
+      label: grafana_alert
+      labelValue: "1"
+      folder: /etc/grafana/provisioning/alerting
+      searchNamespace: monitoring
+
+  # Built-in datasources. Prometheus is auto-wired by the kube-prometheus-stack
+  # chart itself; we add Loki and Tempo here so Grafana can correlate
+  # metrics -> logs -> traces for the class demo.
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      access: proxy
+      url: http://loki.monitoring.svc.cluster.local:3100
+      uid: loki
+      isDefault: false
+      jsonData:
+        maxLines: 1000
+        derivedFields:
+          - datasourceUid: tempo
+            matcherRegex: 'trace_id=(\w+)'
+            name: TraceID
+            url: '$${__value.raw}'
+
+    - name: Tempo
+      type: tempo
+      access: proxy
+      url: http://tempo.monitoring.svc.cluster.local:3200
+      uid: tempo
+      isDefault: false
+      jsonData:
+        httpMethod: GET
+        tracesToLogsV2:
+          datasourceUid: loki
+          spanStartTimeShift: "-1h"
+          spanEndTimeShift: "1h"
+          tags:
+            - key: app
+              value: app
+        serviceMap:
+          datasourceUid: prometheus
+
+  # Read the Discord webhook URL from a Secret (created by the instructor
+  # before deploying, see README.md) and expose it to the Grafana container
+  # as the env var DISCORD_WEBHOOK_URL. `envValueFrom` is the grafana chart
+  # key that maps a chosen env-var name to an arbitrary secret key (unlike
+  # `envFromSecret`, which forces env-var names to match the secret's keys
+  # verbatim, and our secret's key is `url`, not `DISCORD_WEBHOOK_URL`).
+  envValueFrom:
+    DISCORD_WEBHOOK_URL:
+      secretKeyRef:
+        name: discord-webhook
+        key: url
+
+  grafana.ini:
+    server:
+      root_url: "%(protocol)s://%(domain)s:%(http_port)s/"
+    # Unified alerting is the default/only alerting engine from Grafana 9+;
+    # this just makes the intent explicit for the class.
+    unified_alerting:
+      enabled: true
+    alerting:
+      enabled: false
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+
+## ---------------------------------------------------------------------------
+## kube-state-metrics / node-exporter
+## ---------------------------------------------------------------------------
+kubeStateMetrics:
+  enabled: true
+
+nodeExporter:
+  enabled: true
+
+## Disable components that don't matter for a short-lived teaching cluster
+## and only add noise/cost.
+kubeEtcd:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false

@@ -1,0 +1,103 @@
+# Helm values for:
+#   chart:   loki-stack  (bundles Loki + Promtail)
+#   repo:    https://grafana.github.io/helm-charts
+#   release: loki
+#   namespace: monitoring
+#
+# Minimal single-binary Loki with filesystem storage + Promtail scraping all
+# pod logs cluster-wide. No S3 / long-term retention: this is a short-lived
+# class cluster, torn down after the session.
+#
+# fullnameOverride: loki forces the Loki Service name to be exactly "loki",
+# so other components can reach it at:
+#   http://loki.monitoring.svc.cluster.local:3100
+# which is what grafana's additionalDataSources (values-kube-prometheus-stack.yaml)
+# expects.
+
+loki:
+  enabled: true
+  fullnameOverride: loki
+  isDefault: false
+
+  persistence:
+    enabled: false
+
+  # Single-binary mode, filesystem storage (chart default target), fine for
+  # a short-lived teaching cluster.
+  config:
+    auth_enabled: false
+
+    server:
+      http_listen_port: 3100
+
+    common:
+      path_prefix: /data/loki
+      storage:
+        filesystem:
+          chunks_directory: /data/loki/chunks
+          rules_directory: /data/loki/rules
+      replication_factor: 1
+      ring:
+        kvstore:
+          store: inmemory
+
+    schema_config:
+      configs:
+        - from: "2024-01-01"
+          store: tsdb
+          object_store: filesystem
+          schema: v13
+          index:
+            prefix: index_
+            period: 24h
+
+    limits_config:
+      retention_period: 24h
+      reject_old_samples: true
+      reject_old_samples_max_age: 168h
+      ingestion_rate_mb: 16
+      ingestion_burst_size_mb: 32
+
+    ruler:
+      enable_api: false
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+
+  # No ServiceMonitor needed for the class; kube-prometheus-stack's
+  # podMonitorSelector/{} will already discover Loki's own metrics if we ever
+  # add a PodMonitor for it, but it is not required for the demo.
+  serviceMonitor:
+    enabled: false
+
+promtail:
+  enabled: true
+  fullnameOverride: promtail
+
+  config:
+    logLevel: info
+    serverPort: 3101
+
+    clients:
+      - url: http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push
+
+    # Default loki-stack promtail scrape_configs already tail every pod's
+    # container logs cluster-wide via the Kubernetes service discovery
+    # (kubernetes-pods job) with no extra relabeling needed for our apps'
+    # plain JSON stdout logs — Loki indexes by Kubernetes labels (namespace,
+    # pod, container, app) automatically, which is enough to query
+    # `{app="orders-api"}` etc. from Grafana/dashboards.
+    snippets:
+      pipelineStages:
+        - cri: {}
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 128Mi

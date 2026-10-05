@@ -1,0 +1,50 @@
+# Grafana unified-alerting file provisioning: contact points.
+# Picked up by the grafana chart's sidecar (grafana.sidecar.alerts, see
+# ../values/values-kube-prometheus-stack.yaml) because of the
+# `grafana_alert: "1"` label, and copied verbatim into
+# /etc/grafana/provisioning/alerting/contactpoints.yaml inside the Grafana pod.
+#
+# ENV VAR EXPANSION: Grafana's provisioning loader expands `$__env{VAR}`
+# against the Grafana process's own environment for ANY file under
+# /etc/grafana/provisioning (this is documented for datasources and is the
+# same general-purpose provisioning templating used for alerting files). We
+# rely on that here for the Discord webhook URL, sourced from the
+# `discord-webhook` Secret via `grafana.envValueFrom.DISCORD_WEBHOOK_URL`.
+#
+# FALLBACK if your Grafana version does not expand $__env{} in alerting
+# files: edit the `url` field below and paste the real Discord webhook URL
+# directly before applying this ConfigMap (then this file contains a secret
+# -- do not commit the edited version). See README.md for the full note.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-alerting-contactpoints
+  namespace: monitoring
+  labels:
+    grafana_alert: "1"
+data:
+  contactpoints.yaml: |
+    apiVersion: 1
+
+    contactPoints:
+      - orgId: 1
+        name: discord-alerts
+        receivers:
+          - uid: aiops-discord-alerts
+            type: discord
+            settings:
+              url: "$__env{DISCORD_WEBHOOK_URL}"
+              use_discord_username: false
+              title: '{{ template "default.title" . }}'
+              message: '{{ template "default.message" . }}'
+            disableResolveMessage: false
+
+      - orgId: 1
+        name: postmortem-webhook
+        receivers:
+          - uid: aiops-postmortem-webhook
+            type: webhook
+            settings:
+              url: http://postmortem-service.aiops-lab.svc.cluster.local:8080/webhook/grafana
+              httpMethod: POST
+            disableResolveMessage: false

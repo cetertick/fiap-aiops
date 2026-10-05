@@ -1,0 +1,15 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: inventory-api
+  namespace: aiops-lab
+  labels:
+    app: inventory-api
+spec:
+  selector:
+    matchLabels:
+      app: inventory-api
+  podMetricsEndpoints:
+    - port: http
+      path: /metrics
+      interval: 15s

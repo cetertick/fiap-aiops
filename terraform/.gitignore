@@ -1,0 +1,13 @@
+# Arquivos locais do Terraform que nao devem ir para o git.
+# Importante especialmente aqui: o backend de state e local (ver
+# versions.tf) e o .tfstate pode conter dados sensiveis (ARNs, IDs de
+# recursos) - nunca deve ser commitado.
+
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+*.tfplan
+crash.log
+crash.*.log

@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aiops-agent
+  namespace: aiops-lab
+  labels:
+    app: aiops-agent
+spec:
+  # Singleton controller -- do not scale this beyond 1 replica, the control
+  # loop and cooldown state are in-memory and per-process.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aiops-agent
+  template:
+    metadata:
+      labels:
+        app: aiops-agent
+    spec:
+      serviceAccountName: aiops-agent
+      containers:
+        - name: aiops-agent
+          image: ghcr.io/cetertick/fiap-aiops-aiops-agent:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 9100
+          env:
+            - name: NAMESPACE
+              value: "aiops-lab"
+            - name: POLL_INTERVAL_SECONDS
+              value: "15"
+            - name: COOLDOWN_SECONDS
+              value: "60"
+            - name: MAX_REPLICAS
+              value: "5"
+            - name: WATCHED_APPS
+              value: "orders-api,payments-api,inventory-api"
+            - name: APP_PORTS
+              value: "orders-api=8000,payments-api=8001,inventory-api=8002"
+            - name: PROMETHEUS_URL
+              value: "http://kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090"
+            - name: LOKI_URL
+              value: "http://loki.monitoring.svc.cluster.local:3100"
+            - name: ERROR_RATE_THRESHOLD
+              value: "0.20"
+            - name: LATENCY_P95_THRESHOLD_SECONDS
+              value: "1.5"
+            - name: MEMORY_RATIO_THRESHOLD
+              value: "0.85"
+            - name: PROM_WINDOW
+              value: "2m"
+            - name: METRICS_PORT
+              value: "9100"
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 9100
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 9100
+            initialDelaySeconds: 10
+            periodSeconds: 15
